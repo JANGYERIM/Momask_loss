@@ -4,7 +4,6 @@ editing
 generation
 logs/
 log/
-glove/
 dataset/
 __pycache__/
 run/Temp/
