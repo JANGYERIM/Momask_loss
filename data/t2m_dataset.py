@@ -233,6 +233,7 @@ class Text2MotionDataset(data.Dataset):
         self.max_length = 20
         self.pointer = 0
         self.max_motion_length = opt.max_motion_length
+        self.teacher_text_dir = getattr(opt, 'teacher_text_dir', None)
         min_motion_len = 40 if self.opt.dataset_name =='t2m' else 24
 
         data_dict = {}
@@ -305,6 +306,18 @@ class Text2MotionDataset(data.Dataset):
         self.data_dict = data_dict
         self.name_list = name_list
 
+    def _load_teacher_caption(self, name):
+        if self.teacher_text_dir is None:
+            return None
+        # Sub-segment names are like 'A_000001'; strip the prefix to get base name
+        base_name = name.split('_', 1)[1] if (len(name) > 2 and name[1] == '_') else name
+        teacher_path = pjoin(self.teacher_text_dir, base_name + '.txt')
+        try:
+            with open(teacher_path, 'r') as f:
+                return f.read().strip()
+        except:
+            return None
+
     def inv_transform(self, data):
         return data * self.std + self.mean
 
@@ -313,11 +326,16 @@ class Text2MotionDataset(data.Dataset):
 
     def __getitem__(self, item):
         idx = self.pointer + item
-        data = self.data_dict[self.name_list[idx]]
+        name = self.name_list[idx] #name_list: 모션 아이디들 쭉 나열
+        data = self.data_dict[name] #data_dict: {모션 아이디: {motion, length, text}} 형태의 딕셔너리
         motion, m_length, text_list = data['motion'], data['length'], data['text']
         # Randomly select a caption
         text_data = random.choice(text_list)
-        caption, tokens = text_data['caption'], text_data['tokens']
+        caption, tokens = text_data['caption'], text_data['tokens'] #token은 품사 같은거 적혀있는거
+
+        teacher_caption = self._load_teacher_caption(name)
+        if teacher_caption is None:
+            teacher_caption = caption  # fallback: same as original
 
         if self.opt.unit_length < 10:
             coin2 = np.random.choice(['single', 'single', 'double'])
@@ -338,9 +356,8 @@ class Text2MotionDataset(data.Dataset):
             motion = np.concatenate([motion,
                                      np.zeros((self.max_motion_length - m_length, motion.shape[1]))
                                      ], axis=0)
-        # print(word_embeddings.shape, motion.shape)
-        # print(tokens)
-        return caption, motion, m_length
+
+        return caption, teacher_caption, motion, m_length
 
     def reset_min_len(self, length):
         assert length <= self.max_motion_length

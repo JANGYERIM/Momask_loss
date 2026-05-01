@@ -239,10 +239,52 @@ class MaskTransformer(nn.Module):
         logits = self.output_process(output) #(seqlen, b, e) -> (b, ntoken, seqlen)
         return logits
 
-    def forward(self, ids, y, m_lens):
+    def _sample_mask(self, ids, m_lens):
+        '''Sample mask positions and apply BERT masking scheme.
+        Separated from forward() to share the same mask between captions.
+        Returns: x_ids (masked input), labels (targets), non_pad_mask
+        '''
+        bs, ntokens = ids.shape
+        device = ids.device
+        #ntokens : 배치 내에서 가장 긴 시퀀스 길이
+        non_pad_mask = lengths_to_mask(m_lens, ntokens)  # (b, n)
+        ids = torch.where(non_pad_mask, ids, self.pad_id)
+
+        rand_time = uniform((bs,), device=device)
+        rand_mask_probs = self.noise_schedule(rand_time)
+        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
+
+        batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)
+        #몇 개 token을 마스크할지 결정, num_token_masked=4개라면 랜덤하게 작은 4개의 값이 있는 위치 선정
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+        #mask 는 bool 값
+        mask &= non_pad_mask
+
+        labels = torch.where(mask, ids, self.mask_id)
+
+        x_ids = ids.clone()
+        #mask true중 10% 랜덤으로 선택
+        mask_rid = get_mask_subset_prob(mask, 0.1)
+        #전체 시퀀스 길이에 각 인덱스에 랜덤 토큰 인덱스 생성
+        rand_id = torch.randint_like(x_ids, high=self.opt.num_tokens)
+        #10%에 대해 랜덤토큰으로 교체 -> 노이즈
+        x_ids = torch.where(mask_rid, rand_id, x_ids)
+        #mask true& 아직 선택 안된 mask(90%) 중 88% 선택 -> 모델이 예측해야함
+        mask_mid = get_mask_subset_prob(mask & ~mask_rid, 0.88)
+        #나머지 10%는 그대로 원본 유지
+        
+        x_ids = torch.where(mask_mid, self.mask_id, x_ids)
+
+        # x_ids: 마스크된 입력(랜덤토큰, 마스크 토큰, 원본 토큰), 
+        # labels: 모델이 예측해야 하는 정답(원본 토큰 또는 마스크 토큰), 
+        # non_pad_mask: 패딩이 아닌 위치- True(bool 값)
+        return x_ids, labels, non_pad_mask
+
+    def forward(self, ids, y, m_lens, teacher_y=None):
         '''
         :param ids: (b, n)
         :param y: raw text for cond_mode=text, (b, ) for cond_mode=action
+        :param teacher_y: (optional) teacher caption — same mask positions as y
         :m_lens: (b,)
         :return:
         '''
@@ -250,9 +292,8 @@ class MaskTransformer(nn.Module):
         bs, ntokens = ids.shape
         device = ids.device
 
-        # Positions that are PADDED are ALL FALSE
-        non_pad_mask = lengths_to_mask(m_lens, ntokens) #(b, n)
-        ids = torch.where(non_pad_mask, ids, self.pad_id)
+        #x_ids: mask 될 위치- 맞춰야 하는 위치 인덱스, labels: 맞춰야 하는 위치- 원래 token, non_pad_mask: 패딩이 아닌 위치- True
+        x_ids, labels, non_pad_mask = self._sample_mask(ids, m_lens)
 
         force_mask = False
         if self.cond_mode == 'text':
@@ -266,40 +307,17 @@ class MaskTransformer(nn.Module):
         else:
             raise NotImplementedError("Unsupported condition mode!!!")
 
-
-        '''
-        Prepare mask
-        '''
-        rand_time = uniform((bs,), device=device)
-        rand_mask_probs = self.noise_schedule(rand_time)
-        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
-
-        batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)
-        # Positions to be MASKED are ALL TRUE
-        mask = batch_randperm < num_token_masked.unsqueeze(-1)
-
-        # Positions to be MASKED must also be NON-PADDED
-        mask &= non_pad_mask
-
-        # Note this is our training target, not input
-        labels = torch.where(mask, ids, self.mask_id)
-
-        x_ids = ids.clone()
-
-        # Further Apply Bert Masking Scheme
-        # Step 1: 10% replace with an incorrect token
-        mask_rid = get_mask_subset_prob(mask, 0.1)
-        rand_id = torch.randint_like(x_ids, high=self.opt.num_tokens)
-        x_ids = torch.where(mask_rid, rand_id, x_ids)
-        # Step 2: 90% x 10% replace with correct token, and 90% x 88% replace with mask token
-        mask_mid = get_mask_subset_prob(mask & ~mask_rid, 0.88)
-
-        # mask_mid = mask
-
-        x_ids = torch.where(mask_mid, self.mask_id, x_ids)
-
         logits = self.trans_forward(x_ids, cond_vector, ~non_pad_mask, force_mask)
-        ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+
+        if teacher_y is not None:
+            with torch.no_grad():
+                teacher_cond_vector = self.encode_text(teacher_y)
+            teacher_logits = self.trans_forward(x_ids, teacher_cond_vector, ~non_pad_mask, force_mask)
+            loss1, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+            loss2, _, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+            ce_loss = loss1 + loss2
+        else:
+            ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
 
         return ce_loss, pred_id, acc
 

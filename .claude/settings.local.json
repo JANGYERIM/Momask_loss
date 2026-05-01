@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//data/dpfla3573/code/Qwen/logs/**)",
+      "Read(//home/dpfla3573/code/Qwen/**)",
+      "Read(//data/dpfla3573/**)"
+    ]
+  }
+}

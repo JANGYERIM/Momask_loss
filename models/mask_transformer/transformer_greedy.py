@@ -339,7 +339,8 @@ class MaskTransformer(nn.Module):
                  temperature=1,
                  topk_filter_thres=0.9,
                  gsample=False,
-                 force_mask=False
+                 force_mask=False,
+                 greedy=False
                  ):
         # print(self.opt.num_quantizers)
         # assert len(timesteps) >= len(cond_scales) == self.opt.num_quantizers
@@ -407,7 +408,9 @@ class MaskTransformer(nn.Module):
             # temperature = max(temperature, 1e-4)
             # print(filtered_logits.shape)
             # temperature is annealed, gradually reducing temperature as well as randomness
-            if gsample:  # use gumbel_softmax sampling
+            if greedy:
+                pred_ids = filtered_logits.argmax(dim=-1)  # (b, seqlen)
+            elif gsample:  # use gumbel_softmax sampling
                 # print("1111")
                 pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)  # (b, seqlen)
             else:  # use multinomial sampling
@@ -904,6 +907,7 @@ class ResidualTransformer(nn.Module):
                  topk_filter_thres=0.9,
                  cond_scale=2,
                  num_res_layers=-1, # If it's -1, use all.
+                 greedy=False
                  ):
 
         # print(self.opt.num_quantizers)
@@ -952,12 +956,10 @@ class ResidualTransformer(nn.Module):
             # clean low prob token
             filtered_logits = top_k(logits, topk_filter_thres, dim=-1)
 
-            pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)  # (b, seqlen)
-
-            # probs = F.softmax(filtered_logits, dim=-1)  # (b, seqlen, ntoken)
-            # # print(temperature, starting_temperature, steps_until_x0, timesteps)
-            # # print(probs / temperature)
-            # pred_ids = Categorical(probs / temperature).sample()  # (b, seqlen)
+            if greedy:
+                pred_ids = filtered_logits.argmax(dim=-1)  # (b, seqlen)
+            else:
+                pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)  # (b, seqlen)
 
             ids = torch.where(padding_mask, self.pad_id, pred_ids)
 

@@ -280,3 +280,54 @@ models/mask_transformer/transformer_trainer.py
 - Python 3.7.13 / PyTorch 기반
 - CLIP: GitHub 소스 설치 (`pip install git+https://github.com/openai/CLIP.git`)
 - ffmpeg 필요 (MP4 출력 시)
+
+---
+
+## Greedy 디코딩 실험 파일
+
+### 목적
+- 텍스트-모션 생성이 확률적 sampling이 아닌 **argmax(greedy)** 방식으로 동작할 때, 동일 텍스트 입력에 대해 항상 동일한 토큰이 생성되는지 확인.
+- 교수님 미팅용: 학습 데이터에 대해 greedy 생성 결과가 훈련 시 사용된 GT 토큰과 얼마나 일치하는지 비교.
+
+### 파일
+- **`models/mask_transformer/transformer_greedy.py`** — `transformer.py`의 복사본. 원본은 수정하지 않음.
+
+### 변경 내용
+
+#### 1. `MaskTransformer.generate()` (line ~334)
+- 파라미터에 `greedy=False` 추가.
+- 기존 sampling 분기 앞에 greedy 분기 추가:
+  ```python
+  # 변경 전
+  if gsample:
+      pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
+  else:
+      probs = F.softmax(filtered_logits / temperature, dim=-1)
+      pred_ids = Categorical(probs).sample()
+
+  # 변경 후
+  if greedy:
+      pred_ids = filtered_logits.argmax(dim=-1)
+  elif gsample:
+      pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
+  else:
+      probs = F.softmax(filtered_logits / temperature, dim=-1)
+      pred_ids = Categorical(probs).sample()
+  ```
+
+#### 2. `ResidualTransformer.generate()` (line ~899)
+- 파라미터에 `greedy=False` 추가.
+- gumbel sampling 분기를 greedy 분기로 대체:
+  ```python
+  # 변경 전
+  pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
+
+  # 변경 후
+  if greedy:
+      pred_ids = filtered_logits.argmax(dim=-1)
+  else:
+      pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
+  ```
+
+### 사용 방법
+평가/추론 스크립트에서 `transformer` 대신 `transformer_greedy`를 import하고, `generate()` 호출 시 `greedy=True` 전달.

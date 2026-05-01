@@ -37,7 +37,7 @@ class MaskTransformerTrainer:
 
     def forward(self, batch_data):
 
-        conds, motion, m_lens = batch_data
+        conds, teacher_conds, motion, m_lens = batch_data
         motion = motion.detach().float().to(self.device)
         m_lens = m_lens.detach().long().to(self.device)
 
@@ -46,12 +46,8 @@ class MaskTransformerTrainer:
         m_lens = m_lens // 4
 
         conds = conds.to(self.device).float() if torch.is_tensor(conds) else conds
-
-        # loss_dict = {}
-        # self.pred_ids = []
-        # self.acc = []
-
-        _loss, _pred_ids, _acc = self.t2m_transformer(code_idx[..., 0], conds, m_lens)
+        # code_idx[..., 0] : 0번째 layer만 꺼냄
+        _loss, _pred_ids, _acc = self.t2m_transformer(code_idx[..., 0], conds, m_lens, teacher_y=teacher_conds)
 
         return _loss, _acc
 
