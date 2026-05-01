@@ -1,0 +1,510 @@
+================================================================================
+  접근 방법 1 구현 설명서 — Teacher Caption Pair 학습 (방법 C: 마스크 공유)
+================================================================================
+
+작성 목적: 원본 파일과 _tc 파일의 차이를 이해하고, 변경 후 전체 학습 흐름을
+           처음부터 끝까지 파악할 수 있도록 정리한 문서.
+
+--------------------------------------------------------------------------------
+■ 전체 변경 파일 목록
+--------------------------------------------------------------------------------
+
+  1. options/train_option.py               ← --teacher_text_dir 인자 추가
+  2. data/t2m_dataset_tc.py                ← teacher caption 로드 및 반환
+  3. models/mask_transformer/transformer_tc.py         ← 마스크 공유 구조
+  4. models/mask_transformer/transformer_trainer_tc.py ← 배치 언패킹 수정
+  5. run/train_t2m_transformer_tc.py       ← import 교체
+
+
+================================================================================
+1. options/train_option.py
+================================================================================
+
+■ 변경 전
+-----------
+    self.parser.add_argument('--is_continue', ...)
+
+■ 변경 후
+-----------
+    self.parser.add_argument('--is_continue', ...)
+    self.parser.add_argument('--teacher_text_dir', type=str, default=None,
+        help='Directory of teacher captions (.txt files per motion)')
+
+■ 설명
+-------
+  --teacher_text_dir 는 teacher caption 파일들이 들어있는 디렉토리 경로를 받는 인자.
+  default=None 이므로 기존 스크립트(train_t2m_transformer.py)는 아무 영향 없음.
+  _tc 스크립트 실행 시 아래처럼 사용:
+
+    python run/train_t2m_transformer_tc.py \
+        --teacher_text_dir /path/to/teacher_texts \
+        ...
+
+  teacher_text_dir 디렉토리 안에는 모션 이름에 맞는 .txt 파일들이 있어야 한다.
+  예) 모션 이름이 "000001" 이면 → "000001.txt" 파일 하나에 teacher caption 한 줄.
+
+
+================================================================================
+2. data/t2m_dataset_tc.py  (원본: t2m_dataset.py)
+================================================================================
+
+■ 변경 전: __init__ 시작 부분
+-----------
+    class Text2MotionDataset(data.Dataset):
+        def __init__(self, opt, mean, std, split_file):
+            self.opt = opt
+            self.max_length = 20
+            self.pointer = 0
+            self.max_motion_length = opt.max_motion_length
+            min_motion_len = ...
+
+■ 변경 후: __init__ 시작 부분
+-----------
+    class Text2MotionDataset(data.Dataset):
+        def __init__(self, opt, mean, std, split_file):
+            self.opt = opt
+            self.max_length = 20
+            self.pointer = 0
+            self.max_motion_length = opt.max_motion_length
+            self.teacher_text_dir = getattr(opt, 'teacher_text_dir', None)  # ← 추가
+            min_motion_len = ...
+
+  → getattr(opt, 'teacher_text_dir', None) 을 쓰는 이유:
+    opt 객체에 teacher_text_dir 속성이 없어도 에러 없이 None 을 반환.
+    즉, 구 버전 opt.txt 로 resume 해도 안전하게 동작.
+
+------------------------------------------------------------------------
+
+■ 변경 전: __getitem__ 반환값
+-----------
+    def __getitem__(self, item):
+        idx = self.pointer + item
+        data = self.data_dict[self.name_list[idx]]
+        motion, m_length, text_list = data['motion'], data['length'], data['text']
+
+        text_data = random.choice(text_list)   # 2~4개 중 랜덤 1개 선택
+        caption, tokens = text_data['caption'], text_data['tokens']
+
+        ...
+
+        return caption, motion, m_length       # ← 3개 반환
+
+■ 변경 후: __getitem__ 반환값
+-----------
+    def __getitem__(self, item):
+        idx = self.pointer + item
+        name = self.name_list[idx]             # ← name 변수로 따로 저장 (teacher 조회에 필요)
+        data = self.data_dict[name]
+        motion, m_length, text_list = data['motion'], data['length'], data['text']
+
+        text_data = random.choice(text_list)   # 기존과 동일: 2~4개 중 랜덤 1개
+        caption, tokens = text_data['caption'], text_data['tokens']
+
+        teacher_caption = self._load_teacher_caption(name)   # ← teacher caption 로드
+        if teacher_caption is None:
+            teacher_caption = caption          # ← 파일 없으면 원본 캡션으로 fallback
+
+        ...
+
+        return caption, teacher_caption, motion, m_length   # ← 4개 반환
+
+------------------------------------------------------------------------
+
+■ 새로 추가된 메서드: _load_teacher_caption
+-----------
+    def _load_teacher_caption(self, name):
+        if self.teacher_text_dir is None:
+            return None
+
+        # 서브세그먼트 이름 처리
+        # 원본 데이터에서 시간 범위가 있는 모션은 "A_000001" 형태로 저장됨
+        # (A~W 랜덤 prefix 1글자 + '_' + 원본 이름)
+        # teacher caption 파일은 원본 이름 기준이므로 prefix 제거 필요
+        base_name = name.split('_', 1)[1] if (len(name) > 2 and name[1] == '_') else name
+
+        teacher_path = pjoin(self.teacher_text_dir, base_name + '.txt')
+        try:
+            with open(teacher_path, 'r') as f:
+                return f.read().strip()
+        except:
+            return None    # 파일 없으면 None → __getitem__에서 caption으로 대체
+
+  → 서브세그먼트 이름 예시:
+      data_dict 키: "C_000001"  (C가 랜덤 prefix)
+      실제 모션 파일: "000001.npy"
+      teacher caption 파일: teacher_text_dir/000001.txt
+
+  → try/except 로 파일이 없어도 조용히 None 반환.
+    teacher caption 생성이 일부 완료된 상태에서도 학습 가능.
+
+
+================================================================================
+3. models/mask_transformer/transformer_tc.py  (원본: transformer.py)
+================================================================================
+
+이 파일이 가장 핵심적인 변경 포인트.
+
+■ 변경 전: MaskTransformer.forward() 전체
+-----------
+    def forward(self, ids, y, m_lens):
+
+        bs, ntokens = ids.shape
+        device = ids.device
+
+        # 패딩 처리
+        non_pad_mask = lengths_to_mask(m_lens, ntokens)
+        ids = torch.where(non_pad_mask, ids, self.pad_id)
+
+        # 텍스트 인코딩
+        force_mask = False
+        if self.cond_mode == 'text':
+            with torch.no_grad():
+                cond_vector = self.encode_text(y)    # CLIP 인코딩
+        ...
+
+        # 마스크 샘플링
+        rand_time = uniform((bs,), device=device)
+        rand_mask_probs = self.noise_schedule(rand_time)
+        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
+        batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+        mask &= non_pad_mask
+
+        labels = torch.where(mask, ids, self.mask_id)
+
+        x_ids = ids.clone()
+        # BERT 마스킹 (10% 랜덤 토큰, 88% MASK 토큰)
+        mask_rid = get_mask_subset_prob(mask, 0.1)
+        rand_id = torch.randint_like(x_ids, high=self.opt.num_tokens)
+        x_ids = torch.where(mask_rid, rand_id, x_ids)
+        mask_mid = get_mask_subset_prob(mask & ~mask_rid, 0.88)
+        x_ids = torch.where(mask_mid, self.mask_id, x_ids)
+
+        # forward + loss
+        logits = self.trans_forward(x_ids, cond_vector, ~non_pad_mask, force_mask)
+        ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+
+        return ce_loss, pred_id, acc
+
+■ 변경 후: _sample_mask() 분리 + forward(teacher_y=None) 수정
+-----------
+
+  [새 메서드: _sample_mask()]
+
+    def _sample_mask(self, ids, m_lens):
+        bs, ntokens = ids.shape
+        device = ids.device
+
+        non_pad_mask = lengths_to_mask(m_lens, ntokens)
+        ids = torch.where(non_pad_mask, ids, self.pad_id)
+
+        rand_time = uniform((bs,), device=device)
+        rand_mask_probs = self.noise_schedule(rand_time)
+        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
+
+        batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+        mask &= non_pad_mask
+
+        labels = torch.where(mask, ids, self.mask_id)
+
+        x_ids = ids.clone()
+        mask_rid = get_mask_subset_prob(mask, 0.1)
+        rand_id = torch.randint_like(x_ids, high=self.opt.num_tokens)
+        x_ids = torch.where(mask_rid, rand_id, x_ids)
+        mask_mid = get_mask_subset_prob(mask & ~mask_rid, 0.88)
+        x_ids = torch.where(mask_mid, self.mask_id, x_ids)
+
+        return x_ids, labels, non_pad_mask    # ← 반환값 3개
+
+  [수정된 forward()]
+
+    def forward(self, ids, y, m_lens, teacher_y=None):
+
+        bs, ntokens = ids.shape
+        device = ids.device
+
+        # 마스크 샘플링 (분리된 메서드 호출)
+        x_ids, labels, non_pad_mask = self._sample_mask(ids, m_lens)
+
+        # 원본 캡션 인코딩
+        force_mask = False
+        if self.cond_mode == 'text':
+            with torch.no_grad():
+                cond_vector = self.encode_text(y)
+        ...
+
+        # 원본 캡션으로 forward
+        logits = self.trans_forward(x_ids, cond_vector, ~non_pad_mask, force_mask)
+
+        if teacher_y is not None:
+            # teacher 캡션 인코딩 (같은 x_ids, 같은 labels 사용)
+            with torch.no_grad():
+                teacher_cond_vector = self.encode_text(teacher_y)
+            # teacher 캡션으로 forward (x_ids는 동일 → 같은 마스크 위치 예측)
+            teacher_logits = self.trans_forward(x_ids, teacher_cond_vector, ~non_pad_mask, force_mask)
+
+            # 두 loss를 각각 계산하고 합산
+            loss1, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+            loss2, _, _         = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+            ce_loss = loss1 + loss2
+        else:
+            # teacher_y 없을 때는 기존과 동일하게 동작
+            ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+
+        return ce_loss, pred_id, acc
+
+■ 핵심 포인트: 왜 _sample_mask를 분리했는가?
+-----------------------------------------------
+  원본 forward()에서는 마스크 샘플링과 텍스트 인코딩이 뒤섞여 있었다.
+  teacher caption을 쓰려면 "같은 마스크 위치"를 두 캡션이 공유해야 하는데,
+  마스크 샘플링이 forward() 내부에 있으면 두 번 호출 시 마스크가 달라진다.
+
+  따라서:
+    - _sample_mask() : 마스크 위치 결정 (1번만 실행)
+    - trans_forward() : 해당 마스크 + 텍스트 조건으로 예측 (캡션마다 실행)
+
+  이렇게 분리하면 두 캡션이 "정확히 같은 토큰 위치"를 예측하게 된다.
+
+■ BERT 마스킹 스킴이란?
+--------------------------
+  MoMask는 단순히 mask_id를 채우는 것이 아니라 BERT 방식의 마스킹을 적용:
+    - 마스킹 대상 토큰의 88% → mask_id 로 교체 (모델이 복원해야 함)
+    - 마스킹 대상 토큰의 10% → 랜덤 다른 토큰으로 교체 (노이즈 주입)
+    - 나머지 2%           → 원래 토큰 유지 (Identity)
+  labels는 항상 "원래 정답 토큰"을 담고 있어서 loss 계산은 labels 기준으로 함.
+
+■ trans_forward 란?
+----------------------
+  trans_forward(x_ids, cond_vector, padding_mask, force_mask)
+    - x_ids: 마스킹이 적용된 토큰 시퀀스 (일부는 mask_id, 일부는 랜덤, 나머지는 원본)
+    - cond_vector: CLIP 인코딩된 텍스트 임베딩 (b, 512)
+    - padding_mask: 패딩 위치 표시 (True = 패딩)
+    - 출력 logits: (b, num_tokens, seqlen) — 각 위치의 토큰 확률 분포
+
+  즉, "이 텍스트 조건으로 마스킹된 위치들을 예측하라"는 연산.
+
+
+================================================================================
+4. models/mask_transformer/transformer_trainer_tc.py  (원본: transformer_trainer.py)
+================================================================================
+
+■ 변경 전: MaskTransformerTrainer.forward()
+-----------
+    def forward(self, batch_data):
+        conds, motion, m_lens = batch_data          # ← 3개 언패킹
+
+        ...
+
+        _loss, _pred_ids, _acc = self.t2m_transformer(
+            code_idx[..., 0], conds, m_lens         # ← teacher 없음
+        )
+        return _loss, _acc
+
+■ 변경 후: MaskTransformerTrainer.forward()
+-----------
+    def forward(self, batch_data):
+        conds, teacher_conds, motion, m_lens = batch_data   # ← 4개 언패킹
+
+        ...
+
+        _loss, _pred_ids, _acc = self.t2m_transformer(
+            code_idx[..., 0], conds, m_lens, teacher_y=teacher_conds  # ← teacher 추가
+        )
+        return _loss, _acc
+
+■ 설명
+-------
+  DataLoader 가 배치를 만들 때 t2m_dataset_tc.py 의 __getitem__ 이 호출되고,
+  반환값이 (caption, teacher_caption, motion, m_length) 4개로 늘었으므로
+  여기서도 4개로 언패킹해야 한다.
+
+  conds       : list[str], 배치 내 각 샘플의 원본 캡션
+  teacher_conds: list[str], 배치 내 각 샘플의 teacher 캡션
+  motion      : tensor (b, max_motion_len, dim_pose)
+  m_lens      : tensor (b,), 각 모션의 실제 프레임 수
+
+  teacher_conds 를 transformer의 teacher_y 로 전달하면,
+  transformer 내부에서 같은 마스크로 두 번 trans_forward를 실행한다.
+
+
+================================================================================
+5. run/train_t2m_transformer_tc.py  (원본: run/train_t2m_transformer.py)
+================================================================================
+
+■ 변경 전
+-----------
+    from models.mask_transformer.transformer import MaskTransformer
+    from models.mask_transformer.transformer_trainer import MaskTransformerTrainer
+    from data.t2m_dataset import Text2MotionDataset
+
+■ 변경 후
+-----------
+    from models.mask_transformer.transformer_tc import MaskTransformer
+    from models.mask_transformer.transformer_trainer_tc import MaskTransformerTrainer
+    from data.t2m_dataset_tc import Text2MotionDataset
+
+■ 설명
+-------
+  _tc 버전 모듈들을 import 하도록만 바꿨고, 나머지 코드는 동일.
+  실행할 때 --teacher_text_dir 인자를 추가로 넘기면 teacher 학습이 활성화됨.
+
+
+================================================================================
+■ 변경 후 전체 학습 흐름 (end-to-end)
+================================================================================
+
+[학습 시작]
+  python run/train_t2m_transformer_tc.py \
+      --teacher_text_dir /path/to/teacher_captions \
+      --name my_exp_teacher ...
+
+      ↓
+
+[1] DataLoader → t2m_dataset_tc.py Text2MotionDataset.__getitem__()
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │ - data_dict 에서 모션 로드                                  │
+    │ - text_list 에서 랜덤 캡션 1개 선택 → caption              │
+    │ - teacher_text_dir/000001.txt 읽기 → teacher_caption        │
+    │   (파일 없으면 caption 으로 fallback)                       │
+    │ - 모션 클리핑, Z-정규화, 패딩                               │
+    │ return: caption, teacher_caption, motion, m_length          │
+    └─────────────────────────────────────────────────────────────┘
+
+      ↓ DataLoader 가 배치로 묶음
+
+    batch = (
+        conds        : list[str]  길이 b  — 원본 캡션
+        teacher_conds: list[str]  길이 b  — teacher 캡션
+        motion       : (b, 196, 263)      — 패딩된 모션
+        m_lens       : (b,)               — 실제 프레임 수
+    )
+
+      ↓
+
+[2] MaskTransformerTrainer.update(batch) → forward(batch)
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │ conds, teacher_conds, motion, m_lens = batch_data           │
+    │                                                             │
+    │ # RVQ 토크나이저로 모션 → 코드북 인덱스                    │
+    │ code_idx, _ = vq_model.encode(motion)  # (b, n, q)         │
+    │ m_lens = m_lens // 4   # 프레임 → 토큰 길이                │
+    │                                                             │
+    │ # transformer 호출 (teacher_y 포함)                        │
+    │ loss, pred_ids, acc = t2m_transformer(                      │
+    │     code_idx[..., 0],   # (b, n), 첫 번째 quantizer 인덱스 │
+    │     conds,              # 원본 캡션                         │
+    │     m_lens,                                                 │
+    │     teacher_y=teacher_conds                                 │
+    │ )                                                           │
+    └─────────────────────────────────────────────────────────────┘
+
+      ↓
+
+[3] MaskTransformer.forward(ids, y, m_lens, teacher_y)
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │ # 마스크 샘플링 (1번만)                                     │
+    │ x_ids, labels, non_pad_mask = self._sample_mask(ids, m_lens)│
+    │                                                             │
+    │   _sample_mask 내부:                                        │
+    │     1) 패딩 처리 (pad_id 채움)                              │
+    │     2) cosine schedule 로 마스킹 비율 샘플링                │
+    │     3) 랜덤 순열로 마스킹할 위치 결정                       │
+    │     4) labels = 마스킹 위치는 원본 id, 나머지는 mask_id     │
+    │     5) BERT 마스킹 스킴 적용 (88% mask / 10% random / 2% 유지)│
+    │     → x_ids: 모델 입력 / labels: 정답 / non_pad_mask: 패딩마스크│
+    │                                                             │
+    │ # 원본 캡션 CLIP 인코딩                                     │
+    │ cond_vector = CLIP(y)            # (b, 512)                 │
+    │                                                             │
+    │ # 원본 캡션으로 예측                                        │
+    │ logits1 = trans_forward(x_ids, cond_vector, ...)            │
+    │   → (b, num_tokens, seqlen)                                 │
+    │                                                             │
+    │ # teacher 캡션 CLIP 인코딩                                  │
+    │ teacher_cond_vector = CLIP(teacher_y)  # (b, 512)           │
+    │                                                             │
+    │ # teacher 캡션으로 예측 (x_ids 동일 → 같은 마스크 위치!)   │
+    │ logits2 = trans_forward(x_ids, teacher_cond_vector, ...)    │
+    │   → (b, num_tokens, seqlen)                                 │
+    │                                                             │
+    │ # 두 loss 계산 및 합산                                      │
+    │ loss1, pred_id, acc = cal_performance(logits1, labels, ...) │
+    │ loss2, _,       _   = cal_performance(logits2, labels, ...) │
+    │ ce_loss = loss1 + loss2                                     │
+    │                                                             │
+    │ return ce_loss, pred_id, acc                                │
+    └─────────────────────────────────────────────────────────────┘
+
+      ↓
+
+[4] MaskTransformerTrainer.update()
+
+    loss.backward()
+    optimizer.step()
+    scheduler.step()
+
+      ↓
+
+[5] 검증 / 평가 (변경 없음)
+    - val_loader 도 같은 dataset_tc 를 사용하므로 teacher 포함
+    - evaluation_mask_transformer 는 추론만 하므로 teacher 미사용
+
+
+================================================================================
+■ 원본과의 계산량 차이
+================================================================================
+
+  원본:
+    - CLIP 인코딩: 1회 (원본 캡션)
+    - trans_forward: 1회
+    - cal_performance: 1회
+
+  _tc 버전:
+    - CLIP 인코딩: 2회 (원본 + teacher)
+    - trans_forward: 2회
+    - cal_performance: 2회
+    - 마스크 샘플링: 1회 (분리되어 한 번만 실행)
+
+  → 스텝당 약 2배 연산. CLIP은 frozen + no_grad 이므로 메모리 증가는 크지 않음.
+    trans_forward 2회가 주요 오버헤드.
+
+
+================================================================================
+■ 향후 확장 방향 (현재 미구현)
+================================================================================
+
+  현재 구현:
+    ce_loss = loss1 + loss2  (단순 합산)
+
+  향후 확장 (방법 C 심화):
+    - pred1 = argmax(logits1), pred2 = argmax(logits2)
+    - both_wrong = (pred1 != labels) & (pred2 != labels)
+    - 두 캡션 모두 틀린 위치에 loss weight 상향 (예: ×2)
+    - → 모델이 "어려운 토큰"에 집중하도록 유도
+    - 구현 위치: tools.py 에 cal_performance_weighted() 추가
+
+
+================================================================================
+■ 실행 예시
+================================================================================
+
+  # teacher caption 있는 경우
+  python run/train_t2m_transformer_tc.py \
+      --name t2m_teacher_exp01 \
+      --gpu_id 0 \
+      --dataset_name t2m \
+      --vq_name rvq_nq6_dc512_nc512_noshare_qdp0.2 \
+      --teacher_text_dir ./dataset/HumanML3D/teacher_texts
+
+  # teacher caption 없는 경우 (--teacher_text_dir 생략)
+  # → teacher_caption = caption 으로 fallback, 동일 캡션 두 번 학습
+  python run/train_t2m_transformer_tc.py \
+      --name t2m_teacher_exp01 \
+      --gpu_id 0 \
+      ...
+
+================================================================================

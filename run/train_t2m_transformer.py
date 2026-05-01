@@ -5,8 +5,8 @@ import numpy as np
 from torch.utils.data import DataLoader
 from os.path import join as pjoin
 
-from models.mask_transformer.transformer import ResidualTransformer
-from models.mask_transformer.transformer_trainer import ResidualTransformerTrainer
+from models.mask_transformer.transformer import MaskTransformer
+from models.mask_transformer.transformer_trainer import MaskTransformerTrainer
 from models.vq.model import RVQVAE
 
 from options.train_option import TrainT2MOptions
@@ -14,7 +14,7 @@ from options.train_option import TrainT2MOptions
 from utils.plot_script import plot_3d_motion
 from utils.motion_process import recover_from_ric
 from utils.get_opt import get_opt
-from utils.fixseed import fixseed
+from utils.fixseed import fixseed, seed_worker
 from utils.paramUtil import t2m_kinematic_chain, kit_kinematic_chain
 
 from data.t2m_dataset import Text2MotionDataset
@@ -49,11 +49,10 @@ def load_vq_model():
                 vq_opt.vq_act,
                 vq_opt.vq_norm)
     ckpt = torch.load(pjoin(vq_opt.checkpoints_dir, vq_opt.dataset_name, vq_opt.name, 'model', 'net_best_fid.tar'),
-                            map_location=opt.device)
+                            map_location='cpu')
     model_key = 'vq_model' if 'vq_model' in ckpt else 'net'
     vq_model.load_state_dict(ckpt[model_key])
     print(f'Loading VQ Model {opt.vq_name}')
-    vq_model.to(opt.device)
     return vq_model, vq_opt
 
 if __name__ == '__main__':
@@ -68,7 +67,7 @@ if __name__ == '__main__':
     opt.model_dir = pjoin(opt.save_root, 'model')
     # opt.meta_dir = pjoin(opt.save_root, 'meta')
     opt.eval_dir = pjoin(opt.save_root, 'animation')
-    opt.log_dir = pjoin('./log/res/', opt.dataset_name, opt.name)
+    opt.log_dir = pjoin('./log/t2m/', opt.dataset_name, opt.name)
 
     os.makedirs(opt.model_dir, exist_ok=True)
     # os.makedirs(opt.meta_dir, exist_ok=True)
@@ -107,43 +106,26 @@ if __name__ == '__main__':
     clip_version = 'ViT-B/32'
 
     opt.num_tokens = vq_opt.nb_code
-    opt.num_quantizers = vq_opt.num_quantizers
 
-    # if opt.is_v2:
-    res_transformer = ResidualTransformer(code_dim=vq_opt.code_dim,
-                                          cond_mode='text',
-                                          latent_dim=opt.latent_dim,
-                                          ff_size=opt.ff_size,
-                                          num_layers=opt.n_layers,
-                                          num_heads=opt.n_heads,
-                                          dropout=opt.dropout,
-                                          clip_dim=512,
-                                          shared_codebook=vq_opt.shared_codebook,
-                                          cond_drop_prob=opt.cond_drop_prob,
-                                          # codebook=vq_model.quantizer.codebooks[0] if opt.fix_token_emb else None,
-                                            share_weight=opt.share_weight,
-                                          clip_version=clip_version,
-                                          opt=opt)
-    # else:
-    #     res_transformer = ResidualTransformer(code_dim=vq_opt.code_dim,
-    #                                           cond_mode='text',
-    #                                           latent_dim=opt.latent_dim,
-    #                                           ff_size=opt.ff_size,
-    #                                           num_layers=opt.n_layers,
-    #                                           num_heads=opt.n_heads,
-    #                                           dropout=opt.dropout,
-    #                                           clip_dim=512,
-    #                                           shared_codebook=vq_opt.shared_codebook,
-    #                                           cond_drop_prob=opt.cond_drop_prob,
-    #                                           # codebook=vq_model.quantizer.codebooks[0] if opt.fix_token_emb else None,
-    #                                           clip_version=clip_version,
-    #                                           opt=opt)
+    t2m_transformer = MaskTransformer(code_dim=vq_opt.code_dim,
+                                      cond_mode='text',
+                                      latent_dim=opt.latent_dim,
+                                      ff_size=opt.ff_size,
+                                      num_layers=opt.n_layers,
+                                      num_heads=opt.n_heads,
+                                      dropout=opt.dropout,
+                                      clip_dim=512,
+                                      cond_drop_prob=opt.cond_drop_prob,
+                                      clip_version=clip_version,
+                                      opt=opt)
 
+    # if opt.fix_token_emb:
+    #     t2m_transformer.load_and_freeze_token_emb(vq_model.quantizer.codebooks[0])
 
     all_params = 0
-    pc_transformer = sum(param.numel() for param in res_transformer.parameters_wo_clip())
+    pc_transformer = sum(param.numel() for param in t2m_transformer.parameters_wo_clip())
 
-    print(res_transformer)
+    # print(t2m_transformer)
     # print("Total parameters of t2m_transformer net: {:.2f}M".format(pc_transformer / 1000_000))
     all_params += pc_transformer
 
@@ -158,14 +140,14 @@ if __name__ == '__main__':
     train_dataset = Text2MotionDataset(opt, mean, std, train_split_file)
     val_dataset = Text2MotionDataset(opt, mean, std, val_split_file)
 
-    train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True)
+    train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True, worker_init_fn=seed_worker)
+    val_loader = DataLoader(val_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True, worker_init_fn=seed_worker)
 
     eval_val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, 'val', device=opt.device)
 
     wrapper_opt = get_opt(dataset_opt_path, torch.device('cuda'))
     eval_wrapper = EvaluatorModelWrapper(wrapper_opt)
 
-    trainer = ResidualTransformerTrainer(opt, res_transformer, vq_model)
+    trainer = MaskTransformerTrainer(opt, t2m_transformer, vq_model)
 
     trainer.train(train_loader, val_loader, eval_val_loader, eval_wrapper=eval_wrapper, plot_eval=plot_t2m)

@@ -17,7 +17,7 @@ from motion_loaders.dataset_motion_loader import get_dataset_motion_loader
 
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
-from utils.fixseed import fixseed
+from utils.fixseed import fixseed, seed_worker
 
 os.environ["OMP_NUM_THREADS"] = "1"
 
@@ -110,9 +110,9 @@ if __name__ == "__main__":
     val_dataset = MotionDataset(opt, mean, std, val_split_file)
 
     train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, drop_last=True, num_workers=4,
-                              shuffle=True, pin_memory=True)
+                              shuffle=True, pin_memory=True, worker_init_fn=seed_worker)
     val_loader = DataLoader(val_dataset, batch_size=opt.batch_size, drop_last=True, num_workers=4,
-                            shuffle=True, pin_memory=True)
+                            shuffle=True, pin_memory=True, worker_init_fn=seed_worker)
     eval_val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, 'val', device=opt.device)
     trainer.train(train_loader, val_loader, eval_val_loader, eval_wrapper, plot_t2m)
 

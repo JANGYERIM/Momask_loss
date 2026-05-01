@@ -4,6 +4,7 @@ import numpy as np
 from os.path import join as pjoin
 from torch.utils.data import DataLoader
 from utils.get_opt import get_opt
+from utils.fixseed import fixseed, seed_worker
 
 def get_dataset_motion_loader(opt_path, batch_size, fname, device):
     opt = get_opt(opt_path, device)
@@ -19,7 +20,7 @@ def get_dataset_motion_loader(opt_path, batch_size, fname, device):
         split_file = pjoin(opt.data_root, '%s.txt'%fname)
         dataset = Text2MotionDatasetEval(opt, mean, std, split_file, w_vectorizer)
         dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4, drop_last=True,
-                                collate_fn=collate_fn, shuffle=True)
+                                collate_fn=collate_fn, shuffle=True, worker_init_fn=seed_worker )
     else:
         raise KeyError('Dataset not Recognized !!')
 

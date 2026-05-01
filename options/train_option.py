@@ -20,6 +20,7 @@ class TrainT2MOptions(BaseOptions):
         self.parser.add_argument("--seed", default=3407, type=int, help="Seed")
 
         self.parser.add_argument('--is_continue', action="store_true", help='Is this trial continuing previous state?')
+        self.parser.add_argument('--teacher_text_dir', type=str, default=None, help='Directory of teacher captions (.txt files per motion)')
         self.parser.add_argument('--gumbel_sample', action="store_true", help='Strategy for token sampling, True: Gumbel sampling, False: Categorical sampling')
         self.parser.add_argument('--share_weight', action="store_true", help='Whether to share weight for projection/embedding, for residual transformer.')
 
