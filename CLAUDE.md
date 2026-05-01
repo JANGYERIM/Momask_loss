@@ -10,6 +10,15 @@
 
 ---
 
+## 브랜치 관리
+
+| 브랜치 | 설명 |
+|--------|------|
+| `main` | Baseline (원본 MoMask 구조, 파일 재구성 포함) |
+| `expect_token_experiment` | Teacher Caption 기반 난이도 가중 Loss 실험 |
+
+---
+
 ## 프로젝트 아키텍처
 
 ### 모델 파이프라인
