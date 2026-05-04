@@ -129,6 +129,24 @@ def q_schedule(bs, low, high, device):
     schedule = 1 - cosine_schedule(noise)
     return torch.round(schedule * (high - low - 1)).long() + low
 
+def cal_loss_weighted(pred, labels, weight, ignore_index=None):
+    '''Per-position weighted CE loss. weight: (b, seqlen), masked positions only.'''
+    loss = F.cross_entropy(pred, labels, ignore_index=ignore_index, reduction='none')  # (b, seqlen)
+    mask = labels.ne(ignore_index).float()
+    loss = (loss * weight * mask).sum() / mask.sum().clamp(min=1)
+    return loss
+
+
+def cal_performance_weighted(pred, labels, weight, ignore_index=None, tk=1):
+    loss = cal_loss_weighted(pred, labels, weight, ignore_index)
+    pred_id_k = torch.topk(pred, k=tk, dim=1).indices
+    pred_id = pred_id_k[:, 0]
+    mask = labels.ne(ignore_index)
+    n_correct = (pred_id_k == labels.unsqueeze(1)).any(dim=1).masked_select(mask)
+    acc = torch.mean(n_correct.float()).item()
+    return loss, pred_id, acc
+
+
 def cal_performance(pred, labels, ignore_index=None, smoothing=0., tk=1):
     loss = cal_loss(pred, labels, ignore_index, smoothing=smoothing)
     # pred_id = torch.argmax(pred, dim=1)

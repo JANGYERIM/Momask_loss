@@ -309,16 +309,38 @@ class MaskTransformer(nn.Module):
 
         logits = self.trans_forward(x_ids, cond_vector, ~non_pad_mask, force_mask)
 
+        non_masked = labels.eq(self.mask_id)
+
         if teacher_y is not None:
             with torch.no_grad():
                 teacher_cond_vector = self.encode_text(teacher_y)
             teacher_logits = self.trans_forward(x_ids, teacher_cond_vector, ~non_pad_mask, force_mask)
-            loss1, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
-            loss2, teacher_pred_id, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
-            ce_loss = loss1 + loss2
+
+            # weight 계산용 임시 argmax (non-differentiable, gradient 불필요)
+            pred_id_tmp = logits.argmax(dim=1).detach()           # (b, seqlen)
+            teacher_pred_id_tmp = teacher_logits.argmax(dim=1).detach()  # (b, seqlen)
+
+            # ── Case 1: 둘 다 틀린 위치에 high weight ──────────────────────────
+            weight_mask = (pred_id_tmp != ids) & (teacher_pred_id_tmp != ids)
+            # ── Case 2: teacher가 틀린 위치에 high weight ──────────────────────
+            # weight_mask = (teacher_pred_id_tmp != ids)
+            # ── Case 3: original이 틀린 위치에 high weight ─────────────────────
+            # weight_mask = (pred_id_tmp != ids)
+
+            weight = torch.where(weight_mask,
+                                 torch.full_like(ids, 2, dtype=torch.float),
+                                 torch.ones_like(ids, dtype=torch.float))
+
+            loss1, pred_id, acc = cal_performance_weighted(logits, labels, weight, ignore_index=self.mask_id)
+            loss2, teacher_pred_id, _ = cal_performance_weighted(teacher_logits, labels, weight, ignore_index=self.mask_id)
+            teacher_loss_weight = 0.5  # teacher를 보조 학습 신호로 사용
+            ce_loss = loss1 + teacher_loss_weight * loss2
+            teacher_pred_id = torch.where(non_masked, ids, teacher_pred_id)
         else:
             ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
             teacher_pred_id = None
+
+        pred_id = torch.where(non_masked, ids, pred_id)
 
         return ce_loss, pred_id, acc, teacher_pred_id, labels
 

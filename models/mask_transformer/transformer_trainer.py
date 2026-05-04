@@ -231,7 +231,7 @@ class ResidualTransformerTrainer:
 
     def forward(self, batch_data):
 
-        conds, motion, m_lens = batch_data
+        conds, _, motion, m_lens = batch_data
         motion = motion.detach().float().to(self.device)
         m_lens = m_lens.detach().long().to(self.device)
 
