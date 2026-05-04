@@ -228,12 +228,12 @@ class Text2MotionDatasetEval(data.Dataset):
 
 
 class Text2MotionDataset(data.Dataset):
-    def __init__(self, opt, mean, std, split_file):
+    def __init__(self, opt, mean, std, split_file, teacher_text_dir=None):
         self.opt = opt
         self.max_length = 20
         self.pointer = 0
         self.max_motion_length = opt.max_motion_length
-        self.teacher_text_dir = getattr(opt, 'teacher_text_dir', None)
+        self.teacher_text_dir = teacher_text_dir
         min_motion_len = 40 if self.opt.dataset_name =='t2m' else 24
 
         data_dict = {}

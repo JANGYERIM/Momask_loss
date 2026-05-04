@@ -1,3 +1,5 @@
+import json
+import os
 import torch
 from collections import defaultdict
 import torch.optim as optim
@@ -46,20 +48,21 @@ class MaskTransformerTrainer:
         m_lens = m_lens // 4
 
         conds = conds.to(self.device).float() if torch.is_tensor(conds) else conds
+        gt_ids = code_idx[..., 0]
         # code_idx[..., 0] : 0번째 layer만 꺼냄
-        _loss, _pred_ids, _acc = self.t2m_transformer(code_idx[..., 0], conds, m_lens, teacher_y=teacher_conds)
+        _loss, _pred_ids, _acc, _teacher_pred_ids, _labels = self.t2m_transformer(gt_ids, conds, m_lens, teacher_y=teacher_conds)
 
-        return _loss, _acc
+        return _loss, _acc, _pred_ids, _teacher_pred_ids, _labels, gt_ids
 
     def update(self, batch_data):
-        loss, acc = self.forward(batch_data)
+        loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.forward(batch_data)
 
         self.opt_t2m_transformer.zero_grad()
         loss.backward()
         self.opt_t2m_transformer.step()
         self.scheduler.step()
 
-        return loss.item(), acc
+        return loss.item(), acc, pred_ids, teacher_pred_ids, labels, gt_ids
 
     def save(self, file_name, ep, total_it):
         t2m_trans_state_dict = self.t2m_transformer.state_dict()
@@ -125,15 +128,30 @@ class MaskTransformerTrainer:
             self.t2m_transformer.train()
             self.vq_model.eval()
 
+            current_epoch = epoch + 1
+            save_tokens = (current_epoch == 1 or current_epoch % 10 == 0)
+            epoch_token_data = [] if save_tokens else None
+
             for i, batch in enumerate(train_loader):
                 it += 1
                 if it < self.opt.warm_up_iter:
                     self.update_lr_warm_up(it, self.opt.warm_up_iter, self.opt.lr)
 
-                loss, acc = self.update(batch_data=batch)
+                loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.update(batch_data=batch)
                 logs['loss'] += loss
                 logs['acc'] += acc
                 logs['lr'] += self.opt_t2m_transformer.param_groups[0]['lr']
+
+                if save_tokens:
+                    # gt_ids (batch, seq_len) shape임. 
+                    b_size = gt_ids.shape[0] # 한  배치에 들어있는 샘플 수
+                    for b in range(b_size):
+                        epoch_token_data.append({
+                            'gt_ids': gt_ids[b].cpu().tolist(),
+                            'teacher_pred_ids': teacher_pred_ids[b].cpu().tolist() if teacher_pred_ids is not None else None,
+                            'pred_ids': pred_ids[b].cpu().tolist(),
+                            'labels': labels[b].cpu().tolist(),
+                        })
 
                 if it % self.opt.log_every == 0:
                     mean_loss = OrderedDict()
@@ -151,6 +169,14 @@ class MaskTransformerTrainer:
             self.save(pjoin(self.opt.model_dir, 'latest.tar'), epoch, it)
             epoch += 1
 
+            if save_tokens and epoch_token_data:
+                token_dir = pjoin('debug', self.opt.name, 'token_analysis')
+                os.makedirs(token_dir, exist_ok=True)
+                save_path = pjoin(token_dir, f'epoch_{current_epoch:04d}.json')
+                with open(save_path, 'w') as f:
+                    json.dump({'epoch': current_epoch, 'samples': epoch_token_data}, f)
+                print(f'Saved token analysis to {save_path}')
+
             print('Validation time:')
             self.vq_model.eval()
             self.t2m_transformer.eval()
@@ -159,7 +185,7 @@ class MaskTransformerTrainer:
             val_acc = []
             with torch.no_grad():
                 for i, batch_data in enumerate(val_loader):
-                    loss, acc = self.forward(batch_data)
+                    loss, acc, _, _, _, _ = self.forward(batch_data)
                     val_loss.append(loss.item())
                     val_acc.append(acc)
 

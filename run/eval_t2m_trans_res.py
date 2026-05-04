@@ -159,8 +159,8 @@ if __name__ == '__main__':
         repeat_time = 20
         for i in range(repeat_time):
             with torch.no_grad():
-                best_fid, best_div, Rprecision, best_matching, best_mm = \
                 # 모델 호출, (길이 GT에서 직접 꺼내옴 > utils/eval_t2m.py)
+                best_fid, best_div, Rprecision, best_matching, best_mm = \
                     eval_t2m.evaluation_mask_transformer_test_plus_res(eval_val_loader, vq_model, res_model, t2m_transformer,
                                                                        i, eval_wrapper=eval_wrapper,
                                                          time_steps=opt.time_steps, cond_scale=opt.cond_scale,

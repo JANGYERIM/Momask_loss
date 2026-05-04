@@ -331,3 +331,64 @@ models/mask_transformer/transformer_trainer.py
 
 ### 사용 방법
 평가/추론 스크립트에서 `transformer` 대신 `transformer_greedy`를 import하고, `generate()` 호출 시 `greedy=True` 전달.
+
+---
+
+## 토큰 분석 저장 기능 (Token Analysis JSON)
+
+### 목적
+학습 중 에폭별로 모델이 예측한 토큰 ID와 GT 토큰 ID를 비교 분석하기 위해 JSON 파일로 저장.
+
+### 저장 에폭
+- 1 에폭, 10 에폭, 20 에폭, ... (10 단위)
+
+### 저장 위치
+```
+checkpoints/t2m/{실험명}/token_analysis/
+├── epoch_0001.json
+├── epoch_0010.json
+├── epoch_0020.json
+...
+```
+
+### JSON 구조
+```json
+{
+  "epoch": 1,
+  "samples": [
+    {
+      "gt_ids":           [23, 7, 11, ...],   // 전체 GT 토큰 시퀀스 (b, seq_len)
+      "pred_ids":         [23, 7, 9,  ...],   // 원본 캡션 예측 토큰
+      "teacher_pred_ids": [23, 7, 11, ...],   // teacher 캡션 예측 토큰
+      "labels":           [512, 512, 11, ...]  // mask_id=마스킹 안된 위치, 나머지=마스킹된 위치 GT
+    },
+    ...
+  ]
+}
+```
+> `labels`에서 `mask_id`(512)가 아닌 위치 = 실제로 마스킹되어 예측해야 했던 위치
+
+### 수정된 파일 및 위치
+
+**`transformer.py:317`** — `teacher_pred_id` 캡처 및 `labels` 반환 추가
+```python
+# 변경 전
+loss2, _, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+return ce_loss, pred_id, acc
+
+# 변경 후
+loss2, teacher_pred_id, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+teacher_pred_id = None  # (teacher_y 없을 때)
+return ce_loss, pred_id, acc, teacher_pred_id, labels
+```
+
+**`transformer_trainer.py`** — 4곳 수정
+
+| 위치 | 변경 내용 |
+|------|-----------|
+| 상단 import | `import json`, `import os` 추가 |
+| `forward()` | 5개 반환값 언팩 후 `gt_ids` 포함 6개 반환 |
+| `update()` | 6개 언팩/반환 |
+| `train()` 배치 루프 | `save_tokens` 조건 체크 후 샘플별 dict 수집 |
+| `train()` 에폭 끝 | JSON 파일로 저장 및 경로 출력 |
+| `train()` val 루프 | `loss, acc, _, _, _, _` 로 나머지 무시 |

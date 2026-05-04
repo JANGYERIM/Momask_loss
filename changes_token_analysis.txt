@@ -1,0 +1,134 @@
+====================================================
+  토큰 분석 JSON 저장 기능 추가 변경 내역
+  날짜: 2026-05-01
+  브랜치: expect_token_experiment
+====================================================
+
+목적
+----
+학습 중 에폭별로 원본 캡션 / teacher 캡션의 예측 토큰 ID와
+GT 토큰 ID를 JSON 파일에 저장하여 비교 분석 가능하게 함.
+저장 에폭: 1, 10, 20, 30, ... (10 단위)
+
+
+[1] models/mask_transformer/transformer.py
+------------------------------------------
+위치: MaskTransformer.forward() (line ~317)
+
+변경 전:
+    loss2, _, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+    ce_loss = loss1 + loss2
+    ...
+    return ce_loss, pred_id, acc
+
+변경 후:
+    loss2, teacher_pred_id, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+    ce_loss = loss1 + loss2
+    ...
+    else:
+        ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+        teacher_pred_id = None
+
+    return ce_loss, pred_id, acc, teacher_pred_id, labels
+
+변경 이유:
+    - teacher_pred_id를 _ 로 버리던 것을 캡처
+    - labels (마스킹 위치 및 GT) 도 반환에 포함
+    - teacher_y 없는 경우 teacher_pred_id=None, labels는 동일하게 반환
+
+
+[2] models/mask_transformer/transformer_trainer.py
+---------------------------------------------------
+
+(a) 상단 import 추가
+    변경 전: (없음)
+    변경 후:
+        import json
+        import os
+
+(b) MaskTransformerTrainer.forward()
+    변경 전:
+        _loss, _pred_ids, _acc = self.t2m_transformer(code_idx[..., 0], conds, m_lens, teacher_y=teacher_conds)
+        return _loss, _acc
+
+    변경 후:
+        gt_ids = code_idx[..., 0]
+        _loss, _pred_ids, _acc, _teacher_pred_ids, _labels = self.t2m_transformer(gt_ids, conds, m_lens, teacher_y=teacher_conds)
+        return _loss, _acc, _pred_ids, _teacher_pred_ids, _labels, gt_ids
+
+(c) MaskTransformerTrainer.update()
+    변경 전:
+        loss, acc = self.forward(batch_data)
+        ...
+        return loss.item(), acc
+
+    변경 후:
+        loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.forward(batch_data)
+        ...
+        return loss.item(), acc, pred_ids, teacher_pred_ids, labels, gt_ids
+
+(d) MaskTransformerTrainer.train() — 배치 루프 내부
+    변경 전:
+        loss, acc = self.update(batch_data=batch)
+        logs['loss'] += loss
+        logs['acc'] += acc
+
+    변경 후:
+        loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.update(batch_data=batch)
+        logs['loss'] += loss
+        logs['acc'] += acc
+
+        if save_tokens:
+            b_size = gt_ids.shape[0]
+            for b in range(b_size):
+                epoch_token_data.append({
+                    'gt_ids':           gt_ids[b].cpu().tolist(),
+                    'pred_ids':         pred_ids[b].cpu().tolist(),
+                    'teacher_pred_ids': teacher_pred_ids[b].cpu().tolist() if teacher_pred_ids is not None else None,
+                    'labels':           labels[b].cpu().tolist(),
+                })
+
+(e) MaskTransformerTrainer.train() — while 루프 시작 & 에폭 끝
+    추가 (while 루프 시작):
+        current_epoch = epoch + 1
+        save_tokens = (current_epoch == 1 or current_epoch % 10 == 0)
+        epoch_token_data = [] if save_tokens else None
+
+    추가 (epoch += 1 이후):
+        if save_tokens and epoch_token_data:
+            token_dir = pjoin(self.opt.save_root, 'token_analysis')
+            os.makedirs(token_dir, exist_ok=True)
+            save_path = pjoin(token_dir, f'epoch_{current_epoch:04d}.json')
+            with open(save_path, 'w') as f:
+                json.dump({'epoch': current_epoch, 'samples': epoch_token_data}, f)
+            print(f'Saved token analysis to {save_path}')
+
+(f) MaskTransformerTrainer.train() — val 루프
+    변경 전:
+        loss, acc = self.forward(batch_data)
+
+    변경 후:
+        loss, acc, _, _, _, _ = self.forward(batch_data)
+
+
+저장 결과 파일 구조
+-------------------
+checkpoints/t2m/{실험명}/token_analysis/
+├── epoch_0001.json
+├── epoch_0010.json
+├── epoch_0020.json
+...
+
+각 JSON 내부:
+{
+  "epoch": 1,
+  "samples": [
+    {
+      "gt_ids":           [...],  // 전체 GT 토큰 시퀀스
+      "pred_ids":         [...],  // 원본 캡션 예측 토큰
+      "teacher_pred_ids": [...],  // teacher 캡션 예측 토큰 (없으면 null)
+      "labels":           [...]   // mask_id(512)=마스킹 안된 위치, 나머지=마스킹된 위치 GT
+    },
+    ...
+  ]
+}

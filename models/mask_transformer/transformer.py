@@ -314,12 +314,13 @@ class MaskTransformer(nn.Module):
                 teacher_cond_vector = self.encode_text(teacher_y)
             teacher_logits = self.trans_forward(x_ids, teacher_cond_vector, ~non_pad_mask, force_mask)
             loss1, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
-            loss2, _, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
+            loss2, teacher_pred_id, _ = cal_performance(teacher_logits, labels, ignore_index=self.mask_id)
             ce_loss = loss1 + loss2
         else:
             ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)
+            teacher_pred_id = None
 
-        return ce_loss, pred_id, acc
+        return ce_loss, pred_id, acc, teacher_pred_id, labels
 
     def forward_with_cond_scale(self,
                                 motion_ids,

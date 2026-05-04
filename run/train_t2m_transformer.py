@@ -137,8 +137,10 @@ if __name__ == '__main__':
     train_split_file = pjoin(opt.data_root, 'train.txt')
     val_split_file = pjoin(opt.data_root, 'val.txt')
 
-    train_dataset = Text2MotionDataset(opt, mean, std, train_split_file)
-    val_dataset = Text2MotionDataset(opt, mean, std, val_split_file)
+    train_dataset = Text2MotionDataset(opt, mean, std, train_split_file,
+                                       teacher_text_dir=getattr(opt, 'teacher_train_text_dir', None))
+    val_dataset = Text2MotionDataset(opt, mean, std, val_split_file,
+                                     teacher_text_dir=getattr(opt, 'teacher_val_text_dir', None))
 
     train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True, worker_init_fn=seed_worker)
     val_loader = DataLoader(val_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True, worker_init_fn=seed_worker)
