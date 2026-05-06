@@ -337,16 +337,18 @@ class Text2MotionDataset(data.Dataset):
         if teacher_caption is None:
             teacher_caption = caption  # fallback: same as original
 
-        if self.opt.unit_length < 10:
-            coin2 = np.random.choice(['single', 'single', 'double'])
-        else:
-            coin2 = 'single'
+        # if self.opt.unit_length < 10:
+        #     coin2 = np.random.choice(['single', 'single', 'double'])
+        # else:
+        #     coin2 = 'single'
+        coin2 = 'single'  # 크롭 고정 실험
 
         if coin2 == 'double':
             m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
         elif coin2 == 'single':
             m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
-        idx = random.randint(0, len(motion) - m_length)
+        # idx = random.randint(0, len(motion) - m_length)
+        idx = 0  # 크롭 고정 실험
         motion = motion[idx:idx+m_length]
 
         "Z Normalization"
@@ -357,7 +359,7 @@ class Text2MotionDataset(data.Dataset):
                                      np.zeros((self.max_motion_length - m_length, motion.shape[1]))
                                      ], axis=0)
 
-        return caption, teacher_caption, motion, m_length
+        return caption, teacher_caption, motion, m_length, name
 
     def reset_min_len(self, length):
         assert length <= self.max_motion_length

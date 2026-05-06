@@ -321,20 +321,27 @@ class MaskTransformer(nn.Module):
             teacher_pred_id_tmp = teacher_logits.argmax(dim=1).detach()  # (b, seqlen)
 
             # ── Case 1: 둘 다 틀린 위치에 high weight ──────────────────────────
-            weight_mask = (pred_id_tmp != ids) & (teacher_pred_id_tmp != ids)
+            both_wrong = (pred_id_tmp != ids) & (teacher_pred_id_tmp != ids)
+            
+            high_weight_mask = both_wrong & (pred_id_tmp == teacher_pred_id_tmp)
+            mid_weight_mask = both_wrong & (pred_id_tmp != teacher_pred_id_tmp)
+            
             # ── Case 2: teacher가 틀린 위치에 high weight ──────────────────────
             # weight_mask = (teacher_pred_id_tmp != ids)
             # ── Case 3: original이 틀린 위치에 high weight ─────────────────────
             # weight_mask = (pred_id_tmp != ids)
 
-            weight = torch.where(weight_mask,
-                                 torch.full_like(ids, 2, dtype=torch.float),
-                                 torch.ones_like(ids, dtype=torch.float))
+            weight = torch.where(high_weight_mask, 
+                                 torch.full_like(ids, 3, dtype=torch.float),
+                                 torch.where(mid_weight_mask,
+                                            torch.full_like(ids, 2, dtype=torch.float),
+                                            torch.ones_like(ids, dtype=torch.float)))
 
             loss1, pred_id, acc = cal_performance_weighted(logits, labels, weight, ignore_index=self.mask_id)
             loss2, teacher_pred_id, _ = cal_performance_weighted(teacher_logits, labels, weight, ignore_index=self.mask_id)
             teacher_loss_weight = 0.5  # teacher를 보조 학습 신호로 사용
             ce_loss = loss1 + teacher_loss_weight * loss2
+            #ce_loss = loss1 + loss2
             teacher_pred_id = torch.where(non_masked, ids, teacher_pred_id)
         else:
             ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)

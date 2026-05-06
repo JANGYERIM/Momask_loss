@@ -117,11 +117,13 @@ if __name__ == '__main__':
     model_opt.num_quantizers = vq_opt.num_quantizers
     model_opt.code_dim = vq_opt.code_dim
 
-    res_opt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.res_name, 'opt.txt')
-    res_opt = get_opt(res_opt_path, device=opt.device)
-    res_model = load_res_model(res_opt)
-
-    assert res_opt.vq_name == model_opt.vq_name
+    if opt.use_res_model:
+        res_opt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.res_name, 'opt.txt')
+        res_opt = get_opt(res_opt_path, device=opt.device)
+        res_model = load_res_model(res_opt)
+        assert res_opt.vq_name == model_opt.vq_name
+    else:
+        res_model = None
 
     dataset_opt_path = 'checkpoints/kit/Comp_v6_KLD005/opt.txt' if opt.dataset_name == 'kit' \
         else 'checkpoints/t2m/Comp_v6_KLD005/opt.txt'
@@ -142,11 +144,13 @@ if __name__ == '__main__':
         t2m_transformer = load_trans_model(model_opt, file)
         t2m_transformer.eval()
         vq_model.eval()
-        res_model.eval()
+        if res_model is not None:
+            res_model.eval()
 
         t2m_transformer.to(opt.device)
         vq_model.to(opt.device)
-        res_model.to(opt.device)
+        if res_model is not None:
+            res_model.to(opt.device)
 
         fid = []
         div = []
@@ -160,12 +164,20 @@ if __name__ == '__main__':
         for i in range(repeat_time):
             with torch.no_grad():
                 # 모델 호출, (길이 GT에서 직접 꺼내옴 > utils/eval_t2m.py)
-                best_fid, best_div, Rprecision, best_matching, best_mm = \
-                    eval_t2m.evaluation_mask_transformer_test_plus_res(eval_val_loader, vq_model, res_model, t2m_transformer,
-                                                                       i, eval_wrapper=eval_wrapper,
-                                                         time_steps=opt.time_steps, cond_scale=opt.cond_scale,
-                                                         temperature=opt.temperature, topkr=opt.topkr,
-                                                                       force_mask=opt.force_mask, cal_mm=True)
+                if opt.use_res_model:
+                    best_fid, best_div, Rprecision, best_matching, best_mm = \
+                        eval_t2m.evaluation_mask_transformer_test_plus_res(eval_val_loader, vq_model, res_model, t2m_transformer,
+                                                                           i, eval_wrapper=eval_wrapper,
+                                                             time_steps=opt.time_steps, cond_scale=opt.cond_scale,
+                                                             temperature=opt.temperature, topkr=opt.topkr,
+                                                                           force_mask=opt.force_mask, cal_mm=True)
+                else:
+                    best_fid, best_div, Rprecision, best_matching, best_mm = \
+                        eval_t2m.evaluation_mask_transformer_test(eval_val_loader, vq_model, t2m_transformer,
+                                                                  i, eval_wrapper=eval_wrapper,
+                                                                  time_steps=opt.time_steps, cond_scale=opt.cond_scale,
+                                                                  temperature=opt.temperature, topkr=opt.topkr,
+                                                                  force_mask=opt.force_mask, cal_mm=True)
             fid.append(best_fid)
             div.append(best_div)
             top1.append(Rprecision[0])

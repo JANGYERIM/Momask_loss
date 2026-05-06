@@ -5,11 +5,10 @@
 #SBATCH --cpus-per-gpu=8
 #SBATCH --mem-per-gpu=29G
 #SBATCH -p batch_grad
-#SBATCH -w ariel-v2
-#SBATCH -t 0-1
+#SBATCH -w ariel-v5
+#SBATCH -t 1-0
 #SBATCH -o /dev/null
 
-# bash로 직접 실행하면 sbatch로 자기 자신을 제출하고 종료
 if [ -z "$SLURM_JOB_ID" ]; then
     result=$(sbatch "$0")
     echo "$result"
@@ -24,11 +23,11 @@ set -e
 
 # ── 공통 설정 ─────────────────────────────────────────────────────────────
 GPU_ID=0
-DATASET=t2m   # t2m | kit
+DATASET=t2m   
 
 VQ_NAME=rvq_baseline
-TRANS_NAME=mtrans_baseline
-RES_NAME=rtrans_baseline
+TRANS_NAME=mtrans_v2
+RES_NAME=r_baseline
 
 # ── Step 1: Transformer + Residual 평가 ──────────────────────────────────
 /data/dpfla3573/anaconda3/envs/momask/bin/python run/eval_t2m_trans_res.py \
@@ -44,7 +43,7 @@ RES_NAME=rtrans_baseline
     --repeat_times 1 \
     --cond_scale  4 \
     --time_steps  18 \
-    > /data/dpfla3573/code/Momask_loss1/logs/slurm-${SLURM_JOB_ID}_eval_trans.log 2>&1
+    > /data/dpfla3573/code/Momask_loss1/logs/slurm-${SLURM_JOB_ID}_eval_trans_v2.log 2>&1
 
 # ── Step 2: VQ 평가 ──────────────────────────────────────────────────────
 /data/dpfla3573/anaconda3/envs/momask/bin/python run/eval_t2m_vq.py \

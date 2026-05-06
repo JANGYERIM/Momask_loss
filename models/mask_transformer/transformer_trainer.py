@@ -39,7 +39,7 @@ class MaskTransformerTrainer:
 
     def forward(self, batch_data):
 
-        conds, teacher_conds, motion, m_lens = batch_data
+        conds, teacher_conds, motion, m_lens, names = batch_data
         motion = motion.detach().float().to(self.device)
         m_lens = m_lens.detach().long().to(self.device)
 
@@ -52,17 +52,17 @@ class MaskTransformerTrainer:
         # code_idx[..., 0] : 0번째 layer만 꺼냄
         _loss, _pred_ids, _acc, _teacher_pred_ids, _labels = self.t2m_transformer(gt_ids, conds, m_lens, teacher_y=teacher_conds)
 
-        return _loss, _acc, _pred_ids, _teacher_pred_ids, _labels, gt_ids
+        return _loss, _acc, _pred_ids, _teacher_pred_ids, _labels, gt_ids, names
 
     def update(self, batch_data):
-        loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.forward(batch_data)
+        loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids, names = self.forward(batch_data)
 
         self.opt_t2m_transformer.zero_grad()
         loss.backward()
         self.opt_t2m_transformer.step()
         self.scheduler.step()
 
-        return loss.item(), acc, pred_ids, teacher_pred_ids, labels, gt_ids
+        return loss.item(), acc, pred_ids, teacher_pred_ids, labels, gt_ids, names
 
     def save(self, file_name, ep, total_it):
         t2m_trans_state_dict = self.t2m_transformer.state_dict()
@@ -137,16 +137,17 @@ class MaskTransformerTrainer:
                 if it < self.opt.warm_up_iter:
                     self.update_lr_warm_up(it, self.opt.warm_up_iter, self.opt.lr)
 
-                loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids = self.update(batch_data=batch)
+                loss, acc, pred_ids, teacher_pred_ids, labels, gt_ids, names = self.update(batch_data=batch)
                 logs['loss'] += loss
                 logs['acc'] += acc
                 logs['lr'] += self.opt_t2m_transformer.param_groups[0]['lr']
 
                 if save_tokens:
-                    # gt_ids (batch, seq_len) shape임. 
+                    # gt_ids (batch, seq_len) shape임.
                     b_size = gt_ids.shape[0] # 한  배치에 들어있는 샘플 수
                     for b in range(b_size):
                         epoch_token_data.append({
+                            'name': names[b],
                             'gt_ids': gt_ids[b].cpu().tolist(),
                             'teacher_pred_ids': teacher_pred_ids[b].cpu().tolist() if teacher_pred_ids is not None else None,
                             'pred_ids': pred_ids[b].cpu().tolist(),
@@ -174,7 +175,21 @@ class MaskTransformerTrainer:
                 os.makedirs(token_dir, exist_ok=True)
                 save_path = pjoin(token_dir, f'epoch_{current_epoch:04d}.json')
                 with open(save_path, 'w') as f:
-                    json.dump({'epoch': current_epoch, 'samples': epoch_token_data}, f)
+                    f.write('{\n')
+                    f.write(f'  "epoch": {current_epoch},\n')
+                    f.write(f'  "n_samples": {len(epoch_token_data)},\n')
+                    f.write('  "samples": [\n\n')
+                    for i, s in enumerate(epoch_token_data):
+                        f.write('    {\n')
+                        f.write(f'      "name":             {json.dumps(s["name"])},\n')
+                        f.write(f'      "gt_ids":           {json.dumps(s["gt_ids"])},\n')
+                        f.write(f'      "pred_ids":         {json.dumps(s["pred_ids"])},\n')
+                        f.write(f'      "teacher_pred_ids": {json.dumps(s["teacher_pred_ids"])},\n')
+                        f.write(f'      "labels":           {json.dumps(s["labels"])}\n')
+                        comma = ',' if i < len(epoch_token_data) - 1 else ''
+                        f.write(f'    }}{comma}\n\n\n')
+                    f.write('  ]\n')
+                    f.write('}\n')
                 print(f'Saved token analysis to {save_path}')
 
             print('Validation time:')
@@ -185,7 +200,7 @@ class MaskTransformerTrainer:
             val_acc = []
             with torch.no_grad():
                 for i, batch_data in enumerate(val_loader):
-                    loss, acc, _, _, _, _ = self.forward(batch_data)
+                    loss, acc, _, _, _, _, _ = self.forward(batch_data)
                     val_loss.append(loss.item())
                     val_acc.append(acc)
 
