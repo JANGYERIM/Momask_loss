@@ -262,17 +262,18 @@ class MaskTransformer(nn.Module):
         t=0.9 →  16%  │                                                                                    
         t=1.0 →   0%
         --> 기대값: 63.7% 마스킹, 최소 1개 토큰 마스킹
-        ''' 
+        
+        
         if self.current_epoch >= self.opt.max_epoch:
             rand_mask_probs = torch.ones(bs, device=device)
         else:
             rand_mask_probs = self.noise_schedule(rand_time)
+        ''' 
+        rand_mask_probs = self.noise_schedule(rand_time)
         
-        # rand_mask_probs = torch.ones(bs, device=device)
-        
-        # epoch 에 따라 floor를 0.4 -> 1.0으로 선형 증가
-        #min_mask = 0.4 + 0.6 * (self.current_epoch / self.opt.max_epoch)
-        #rand_mask_probs = rand_mask_probs.clamp(min=min_mask)
+        # epoch 에 따라 floor를 0.6 -> 1.0으로 선형 증가
+        min_mask = 0.6 + 0.4 * (self.current_epoch / (self.opt.max_epoch - 1))
+        rand_mask_probs = rand_mask_probs.clamp(min=min_mask)
 
         num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
         batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)

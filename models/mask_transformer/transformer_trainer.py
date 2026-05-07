@@ -111,8 +111,8 @@ class MaskTransformerTrainer:
 
         start_time = time.time()
         #추가 학습할 에폭
-        FULL_MASK_EXTRA = 500
-        total_iters = (self.opt.max_epoch + FULL_MASK_EXTRA) * len(train_loader)
+        #FULL_MASK_EXTRA = 500
+        total_iters = (self.opt.max_epoch ) * len(train_loader)
         print(f'Total Epochs: {self.opt.max_epoch}, Total Iters: {total_iters}')
         print('Iters Per Epoch, Training: %04d, Validation: %03d' % (len(train_loader), len(val_loader)))
         logs = defaultdict(def_value, OrderedDict())
@@ -126,7 +126,7 @@ class MaskTransformerTrainer:
         )
         best_acc = 0.
 
-        while epoch < self.opt.max_epoch+FULL_MASK_EXTRA:
+        while epoch < self.opt.max_epoch:
             self.t2m_transformer.current_epoch = epoch
             self.t2m_transformer.train()
             self.vq_model.eval()
