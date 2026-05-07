@@ -56,6 +56,7 @@ class RVQVAE(nn.Module):
         # print(x_encoder.shape)
         code_idx, all_codes = self.quantizer.quantize(x_encoder, return_latent=True)
         # print(code_idx.shape)
+        # code_idx.shape = (N, T_downsampled, num_quantizers) , num_zuantizers: 레이어
         # code_idx = code_idx.view(N, -1)
         # (N, T, Q)
         # print()

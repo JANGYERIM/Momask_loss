@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 # from networks.layers import *
 import torch.nn.functional as F
-import clip
+from transformers import BertModel, BertTokenizer
 from einops import rearrange, repeat
 import math
 from random import random
@@ -144,9 +144,9 @@ class MaskTransformer(nn.Module):
         '''
 
         if self.cond_mode == 'text':
-            print('Loading CLIP...')
+            print('Loading BERT...')
             self.clip_version = clip_version
-            self.clip_model = self.load_and_freeze_clip(clip_version)
+            self.bert_model, self.bert_tokenizer = self.load_and_freeze_bert(clip_version)
 
         self.noise_schedule = cosine_schedule
 
@@ -173,29 +173,24 @@ class MaskTransformer(nn.Module):
             module.weight.data.fill_(1.0)
 
     def parameters_wo_clip(self):
-        return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
+        return [p for name, p in self.named_parameters() if not name.startswith('bert_model.')]
 
-    def load_and_freeze_clip(self, clip_version):
-        clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
-                                                jit=False)  # Must set jit=False for training
-        # Added support for cpu
-        if str(self.opt.device) != "cpu":
-            clip.model.convert_weights(
-                clip_model)  # Actually this line is unnecessary since clip by default already on float16
-            # Date 0707: It's necessary, only unecessary when load directly to gpu. Disable if need to run on cpu
-
-        # Freeze CLIP weights
-        clip_model.eval()
-        for p in clip_model.parameters():
+    def load_and_freeze_bert(self, bert_version):
+        tokenizer = BertTokenizer.from_pretrained(bert_version)
+        model = BertModel.from_pretrained(bert_version)
+        model.eval()
+        for p in model.parameters():
             p.requires_grad = False
-
-        return clip_model
+        return model, tokenizer
 
     def encode_text(self, raw_text):
         device = next(self.parameters()).device
-        text = clip.tokenize(raw_text, truncate=True).to(device)
-        feat_clip_text = self.clip_model.encode_text(text).float()
-        return feat_clip_text
+        inputs = self.bert_tokenizer(raw_text, return_tensors='pt', padding=True,
+                                     truncation=True, max_length=512)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        outputs = self.bert_model(**inputs)
+        cls_feat = outputs.last_hidden_state[:, 0, :].float()  # [CLS] token
+        return cls_feat
 
     def mask_cond(self, cond, force_mask=False):
         bs, d =  cond.shape
@@ -760,9 +755,9 @@ class ResidualTransformer(nn.Module):
         self.share_weight = share_weight
 
         if self.cond_mode == 'text':
-            print('Loading CLIP...')
+            print('Loading BERT...')
             self.clip_version = clip_version
-            self.clip_model = self.load_and_freeze_clip(clip_version)
+            self.bert_model, self.bert_tokenizer = self.load_and_freeze_bert(clip_version)
 
     # def
 
@@ -786,29 +781,24 @@ class ResidualTransformer(nn.Module):
             module.weight.data.fill_(1.0)
 
     def parameters_wo_clip(self):
-        return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
+        return [p for name, p in self.named_parameters() if not name.startswith('bert_model.')]
 
-    def load_and_freeze_clip(self, clip_version):
-        clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
-                                                jit=False)  # Must set jit=False for training
-        # Added support for cpu
-        if str(self.opt.device) != "cpu":
-            clip.model.convert_weights(
-                clip_model)  # Actually this line is unnecessary since clip by default already on float16
-            # Date 0707: It's necessary, only unecessary when load directly to gpu. Disable if need to run on cpu
-
-        # Freeze CLIP weights
-        clip_model.eval()
-        for p in clip_model.parameters():
+    def load_and_freeze_bert(self, bert_version):
+        tokenizer = BertTokenizer.from_pretrained(bert_version)
+        model = BertModel.from_pretrained(bert_version)
+        model.eval()
+        for p in model.parameters():
             p.requires_grad = False
-
-        return clip_model
+        return model, tokenizer
 
     def encode_text(self, raw_text):
         device = next(self.parameters()).device
-        text = clip.tokenize(raw_text, truncate=True).to(device)
-        feat_clip_text = self.clip_model.encode_text(text).float()
-        return feat_clip_text
+        inputs = self.bert_tokenizer(raw_text, return_tensors='pt', padding=True,
+                                     truncation=True, max_length=512)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        outputs = self.bert_model(**inputs)
+        cls_feat = outputs.last_hidden_state[:, 0, :].float()  # [CLS] token
+        return cls_feat
 
 
     def q_schedule(self, bs, low, high):

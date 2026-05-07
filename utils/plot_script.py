@@ -393,9 +393,9 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, figsize=(10, 10), f
         for i, (chain, color) in enumerate(zip(kinematic_tree, colors)):
             #             print(color)
             if i < 5:
-                linewidth = 4.0
+                linewidth = 6.0
             else:
-                linewidth = 2.0
+                linewidth = 4.0
             ax.plot3D(data[index, chain, 0], data[index, chain, 1], data[index, chain, 2], linewidth=linewidth,
                       color=color)
         #         print(trajec[:index, 0].shape)

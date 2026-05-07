@@ -50,7 +50,8 @@ class MaskTransformerTrainer:
         conds = conds.to(self.device).float() if torch.is_tensor(conds) else conds
         gt_ids = code_idx[..., 0]
         # code_idx[..., 0] : 0번째 layer만 꺼냄 -> gt_ids.shape = (b, T//4)
-        _loss, _pred_ids, _acc, _teacher_pred_ids, _labels = self.t2m_transformer(gt_ids, conds, m_lens, teacher_y=teacher_conds)
+        use_teacher = getattr(self.opt, 'teacher_train_text_dir', None) is not None
+        _loss, _pred_ids, _acc, _teacher_pred_ids, _labels = self.t2m_transformer(gt_ids, conds, m_lens, teacher_y=teacher_conds if use_teacher else None)
 
         return _loss, _acc, _pred_ids, _teacher_pred_ids, _labels, gt_ids, names
 
@@ -66,7 +67,7 @@ class MaskTransformerTrainer:
 
     def save(self, file_name, ep, total_it):
         t2m_trans_state_dict = self.t2m_transformer.state_dict()
-        clip_weights = [e for e in t2m_trans_state_dict.keys() if e.startswith('clip_model.')]
+        clip_weights = [e for e in t2m_trans_state_dict.keys() if e.startswith('bert_model.')]
         for e in clip_weights:
             del t2m_trans_state_dict[e]
         state = {
@@ -82,7 +83,7 @@ class MaskTransformerTrainer:
         checkpoint = torch.load(model_dir, map_location=self.device)
         missing_keys, unexpected_keys = self.t2m_transformer.load_state_dict(checkpoint['t2m_transformer'], strict=False)
         assert len(unexpected_keys) == 0
-        assert all([k.startswith('clip_model.') for k in missing_keys])
+        assert all([k.startswith('bert_model.') for k in missing_keys])
 
         try:
             self.opt_t2m_transformer.load_state_dict(checkpoint['opt_t2m_transformer']) # Optimizer
@@ -272,7 +273,7 @@ class ResidualTransformerTrainer:
 
     def save(self, file_name, ep, total_it):
         res_trans_state_dict = self.res_transformer.state_dict()
-        clip_weights = [e for e in res_trans_state_dict.keys() if e.startswith('clip_model.')]
+        clip_weights = [e for e in res_trans_state_dict.keys() if e.startswith('bert_model.')]
         for e in clip_weights:
             del res_trans_state_dict[e]
         state = {
@@ -288,7 +289,7 @@ class ResidualTransformerTrainer:
         checkpoint = torch.load(model_dir, map_location=self.device)
         missing_keys, unexpected_keys = self.res_transformer.load_state_dict(checkpoint['res_transformer'], strict=False)
         assert len(unexpected_keys) == 0
-        assert all([k.startswith('clip_model.') for k in missing_keys])
+        assert all([k.startswith('bert_model.') for k in missing_keys])
 
         try:
             self.opt_res_transformer.load_state_dict(checkpoint['opt_res_transformer']) # Optimizer
