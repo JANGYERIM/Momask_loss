@@ -1,20 +1,20 @@
 #!/usr/bin/bash
 
-#SBATCH -J MM_MTrans_v3-1
+#SBATCH -J MM_MTrans_v4-1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=8
 #SBATCH --mem-per-gpu=29G
 #SBATCH -p batch_grad
 #SBATCH -w ariel-v12
 #SBATCH -t 2-0
-#SBATCH -o /data/dpfla3573/code/Momask_loss1/logs/slurm-%A_mtrans_loss_v3-1.out
+#SBATCH -o /data/dpfla3573/code/Momask_loss1/logs/slurm-%A_mtrans_loss_v4-1.out
 
 cd /data/dpfla3573/code/Momask_loss1
 export PYTHONPATH=/data/dpfla3573/code/Momask_loss1:$PYTHONPATH
 teacher_path=/data4/local_datasets/HumanML3D/Translate/
 
 /data/dpfla3573/anaconda3/envs/momask/bin/python run/train_t2m_transformer.py \
-  --name mtrans_v3-1 \
+  --name mtrans_v4-1 \
   --gpu_id 0 \
   --dataset_name t2m \
   --batch_size 64 \

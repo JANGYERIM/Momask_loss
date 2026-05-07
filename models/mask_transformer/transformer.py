@@ -87,7 +87,7 @@ class MaskTransformer(nn.Module):
                  clip_version=None, opt=None, **kargs):
         super(MaskTransformer, self).__init__()
         print(f'latent_dim: {latent_dim}, ff_size: {ff_size}, nlayers: {num_layers}, nheads: {num_heads}, dropout: {dropout}')
-
+        
         self.code_dim = code_dim
         self.latent_dim = latent_dim
         self.clip_dim = clip_dim
@@ -147,7 +147,7 @@ class MaskTransformer(nn.Module):
             print('Loading CLIP...')
             self.clip_version = clip_version
             self.clip_model = self.load_and_freeze_clip(clip_version)
-
+        self.current_epoch = 0
         self.noise_schedule = cosine_schedule
 
     def load_and_freeze_token_emb(self, codebook):
@@ -251,9 +251,25 @@ class MaskTransformer(nn.Module):
         ids = torch.where(non_pad_mask, ids, self.pad_id)
 
         rand_time = uniform((bs,), device=device)
+        '''
+        t=0.0 → 100%  ┐                                                                                                                 
+        t=0.1 →  99%  │                                                                                           
+        t=0.2 →  95%  │                                                                            
+        t=0.3 →  89%  ┘                                                                                                               
+                                                                                                                                        
+        t=0.7 →  46%  ┐                                                                                                                 
+        t=0.8 →  31%  │                                                                                          
+        t=0.9 →  16%  │                                                                                    
+        t=1.0 →   0%
+        --> 기대값: 63.7% 마스킹, 최소 1개 토큰 마스킹
+        ''' 
         rand_mask_probs = self.noise_schedule(rand_time)
-        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
+        
+        # epoch 에 따라 floor를 0.4 -> 1.0으로 선형 증가
+        min_mask = 0.4 + 0.6 * (self.current_epoch / self.opt.max_epoch)
+        rand_mask_probs = rand_mask_probs.clamp(min=min_mask)
 
+        num_token_masked = (ntokens * rand_mask_probs).round().clamp(min=1)
         batch_randperm = torch.rand((bs, ntokens), device=device).argsort(dim=-1)
         #몇 개 token을 마스크할지 결정, num_token_masked=4개라면 랜덤하게 작은 4개의 값이 있는 위치 선정
         mask = batch_randperm < num_token_masked.unsqueeze(-1)
@@ -340,8 +356,8 @@ class MaskTransformer(nn.Module):
             loss1, pred_id, acc = cal_performance_weighted(logits, labels, weight, ignore_index=self.mask_id)
             loss2, teacher_pred_id, _ = cal_performance_weighted(teacher_logits, labels, weight, ignore_index=self.mask_id)
             teacher_loss_weight = 0.5  # teacher를 보조 학습 신호로 사용
-            ce_loss = loss1 + teacher_loss_weight * loss2
-            #ce_loss = loss1 + loss2
+            #ce_loss = loss1 + teacher_loss_weight * loss2
+            ce_loss = loss1 + loss2
             teacher_pred_id = torch.where(non_masked, ids, teacher_pred_id)
         else:
             ce_loss, pred_id, acc = cal_performance(logits, labels, ignore_index=self.mask_id)

@@ -1,4 +1,7 @@
+import json
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from os.path import join as pjoin
 
 import torch
@@ -102,6 +105,57 @@ def load_len_estimator(opt):
 
 
 if __name__ == '__main__':
+    # ==================================================================
+    # CONFIG — 여기서 직접 수정
+    # ==================================================================
+    GPU_ID       = 0
+    NAME         = 'mtrans_v2'   # M-Transformer 체크포인트명
+    TRANS_CKPT   = 'net_best_fid.tar'   # M-Transformer 체크포인트 파일 (latest.tar | net_best_fid.tar | net_ep0050.tar ...)
+    RES_NAME     = 'rtrans_baseline'       # R-Transformer 체크포인트명
+    DATASET      = 't2m'          # 't2m' | 'kit'
+    EXT          = 'mtrans_v2'  # 결과 폴더명 (generation/{EXT}/)
+    REPEAT_TIMES = 1
+    TIME_STEPS   = 18
+    COND_SCALE   = 4.0
+    TEMPERATURE  = 0.0
+    TOPKR        = 0.9
+    SEED         = 10107
+
+    # -------------------------------------------------------
+    # IsTrainData = True  : CAPTIONS / MOTION_IDS 를 이 파일에 직접 입력
+    #                       MOTION_IDS 의 .npy 를 VQ 인코딩해 실제 토큰 길이 사용
+    #                       (length estimator 미사용)
+    # IsTrainData = False : 기존 동작 (length estimator 또는 지정 길이)
+    # -------------------------------------------------------
+    IsTrainData = True
+
+    # IsTrainData = True 일 때만 사용 — 직접 수정
+    CAPTIONS = [
+        "a man walks forward, kicking up his feet, then turns and goes the opposite direction, still kicking his feet.",
+        "a person walks forward with a kicking gait, turns, and walks backward",
+    ]
+    MOTION_IDS = [    # dataset/HumanML3D/new_joint_vecs/ 아래 파일명 (확장자 제외)
+        "001481",
+        "001481",
+        #"000034",
+    ]
+    # ==================================================================
+
+    sys.argv = [
+        sys.argv[0],
+        '--gpu_id',      str(GPU_ID),
+        '--name',        NAME,
+        '--res_name',    RES_NAME,
+        '--dataset_name', DATASET,
+        '--ext',         EXT,
+        '--repeat_times', str(REPEAT_TIMES),
+        '--time_steps',  str(TIME_STEPS),
+        '--cond_scale',  str(COND_SCALE),
+        '--temperature', str(TEMPERATURE),
+        '--topkr',       str(TOPKR),
+        '--seed',        str(SEED),
+    ]
+
     parser = EvalT2MOptions()
     opt = parser.parse()
     fixseed(opt.seed)
@@ -148,7 +202,7 @@ if __name__ == '__main__':
     #################################
     ######Loading M-Transformer######
     #################################
-    t2m_transformer = load_trans_model(model_opt, opt, 'latest.tar')
+    t2m_transformer = load_trans_model(model_opt, opt, TRANS_CKPT)
 
     ##################################
     #####Loading Length Predictor#####
@@ -176,38 +230,68 @@ if __name__ == '__main__':
     prompt_list = []
     length_list = []
 
-    est_length = False
-    if opt.text_prompt != "":
-        prompt_list.append(opt.text_prompt)
-        if opt.motion_length == 0:
-            est_length = True
-        else:
-            length_list.append(opt.motion_length)
-    elif opt.text_path != "":
-        with open(opt.text_path, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                infos = line.split('#')
-                prompt_list.append(infos[0])
-                if len(infos) == 1 or (not infos[1].isdigit()):
-                    est_length = True
-                    length_list = []
-                else:
-                    length_list.append(int(infos[-1]))
-    else:
-        raise "A text prompt, or a file a text prompts are required!!!"
-    # print('loading checkpoint {}'.format(file))
+    if IsTrainData:
+        # ----------------------------------------------------------
+        # CAPTIONS, MOTION_IDS 를 위에서 직접 입력
+        # MOTION_IDS 의 .npy 를 VQ 인코딩 → 실제 토큰 길이 계산
+        # length estimator 미사용
+        # ----------------------------------------------------------
+        assert len(CAPTIONS) == len(MOTION_IDS), "CAPTIONS 와 MOTION_IDS 개수가 일치해야 합니다"
+        prompt_list = list(CAPTIONS)
 
-    if est_length:
-        print("Since no motion length are specified, we will use estimated motion lengthes!!")
-        text_embedding = t2m_transformer.encode_text(prompt_list)
-        pred_dis = length_estimator(text_embedding)
-        probs = F.softmax(pred_dis, dim=-1)  # (b, ntoken)
-        token_lens = Categorical(probs).sample()  # (b, seqlen)
-        # lengths = torch.multinomial()
+        token_lens_list = []
+        gt_ids_list = []
+        with torch.no_grad():
+            for motion_id in MOTION_IDS:
+                motion = np.load(pjoin(model_opt.motion_dir, motion_id + '.npy'))
+                m_len  = (len(motion) // 4) * 4        # 4의 배수로 정렬
+                motion = motion[:m_len]
+                motion_norm   = (motion - mean) / std
+                motion_tensor = torch.from_numpy(motion_norm).unsqueeze(0).float().to(opt.device)
+
+                code_idx, _ = vq_model.encode(motion_tensor)  # (1, T_token, Q)
+                token_lens_list.append(code_idx.shape[1])
+                gt_ids_list.append(code_idx[0, :, 0].cpu().tolist())  # layer-0 GT ids
+
+        token_lens = torch.LongTensor(token_lens_list).to(opt.device)
+
     else:
-        token_lens = torch.LongTensor(length_list) // 4
-        token_lens = token_lens.to(opt.device).long()
+        gt_ids_list = None
+        # ----------------------------------------------------------
+        # [기존 코드] length estimator 또는 직접 지정된 길이 사용
+        # ----------------------------------------------------------
+        est_length = False
+        if opt.text_prompt != "":
+            prompt_list.append(opt.text_prompt)
+            if opt.motion_length == 0:
+                est_length = True
+            else:
+                length_list.append(opt.motion_length)
+        elif opt.text_path != "":
+            with open(opt.text_path, 'r') as f:
+                lines = f.readlines()
+                for line in lines:
+                    infos = line.split('#')
+                    prompt_list.append(infos[0])
+                    if len(infos) == 1 or (not infos[1].isdigit()):
+                        est_length = True
+                        length_list = []
+                    else:
+                        length_list.append(int(infos[-1]))
+        else:
+            raise "A text prompt, or a file a text prompts are required!!!"
+        # print('loading checkpoint {}'.format(file))
+
+        if est_length:
+            print("Since no motion length are specified, we will use estimated motion lengthes!!")
+            text_embedding = t2m_transformer.encode_text(prompt_list)
+            pred_dis = length_estimator(text_embedding)
+            probs = F.softmax(pred_dis, dim=-1)  # (b, ntoken)
+            token_lens = Categorical(probs).sample()  # (b, seqlen)
+            # lengths = torch.multinomial()
+        else:
+            token_lens = torch.LongTensor(length_list) // 4
+            token_lens = token_lens.to(opt.device).long()
 
     m_length = token_lens * 4
     captions = prompt_list
@@ -225,8 +309,31 @@ if __name__ == '__main__':
                                             temperature=opt.temperature,
                                             topk_filter_thres=opt.topkr,
                                             gsample=opt.gumbel_sample)
-            # print(mids)
-            # print(mids.shape)
+            # layer-0 pred_ids before residual refinement
+            pred_ids_layer0 = mids.cpu()
+
+            # save pred/gt token ids per repeat
+            token_records = []
+            for k in range(len(captions)):
+                t_len = token_lens[k].item()
+                pred = pred_ids_layer0[k, :t_len].tolist()
+                name = MOTION_IDS[k] if IsTrainData else f"sample_{k}"
+                entry = {"name": name, "pred_ids": pred}
+                if gt_ids_list is not None:
+                    entry["gt_ids"] = gt_ids_list[k]
+                token_records.append(entry)
+            token_save_path = pjoin(result_dir, f"token_ids_repeat{r}.json")
+            with open(token_save_path, 'w') as f:
+                import re
+                raw = json.dumps(token_records, indent=2)
+                compacted = re.sub(
+                    r'\[(\s*-?\d+(?:\s*,\s*-?\d+)*\s*)\]',
+                    lambda m: '[' + ', '.join(x.strip() for x in m.group(1).split(',')) + ']',
+                    raw, flags=re.DOTALL
+                )
+                f.write(compacted)
+            print(f"Token IDs saved to {token_save_path}")
+
             mids = res_model.generate(mids, captions, token_lens, temperature=1, cond_scale=5)
             pred_motions = vq_model.forward_decoder(mids)
 
