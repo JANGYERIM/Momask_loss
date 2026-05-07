@@ -14,7 +14,7 @@ export PYTHONPATH=/data/dpfla3573/code/Momask_loss1:$PYTHONPATH
 teacher_path=/data4/local_datasets/HumanML3D/Translate/
 
 /data/dpfla3573/anaconda3/envs/momask/bin/python run/train_t2m_transformer.py \
-  --name mtrans_v4-1 \
+  --name mtrans_v4-2 \
   --gpu_id 0 \
   --dataset_name t2m \
   --batch_size 64 \
