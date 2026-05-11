@@ -109,11 +109,11 @@ if __name__ == '__main__':
     # CONFIG — 여기서 직접 수정
     # ==================================================================
     GPU_ID       = 0
-    NAME         = 'mtrans_v2'   # M-Transformer 체크포인트명
-    TRANS_CKPT   = 'net_best_fid.tar'   # M-Transformer 체크포인트 파일 (latest.tar | net_best_fid.tar | net_ep0050.tar ...)
+    NAME         = 'mtrans_v2-2'   # M-Transformer 체크포인트명
+    TRANS_CKPT   = 'net_best_acc.tar'   # M-Transformer 체크포인트 파일 (latest.tar | net_best_fid.tar | net_ep0050.tar ...)
     RES_NAME     = 'rtrans_baseline'       # R-Transformer 체크포인트명
     DATASET      = 't2m'          # 't2m' | 'kit'
-    EXT          = 'mtrans_v2'  # 결과 폴더명 (generation/{EXT}/)
+    EXT          = 'mtrans_v2-2/001481'  # 결과 폴더명 (generation/{EXT}/)
     REPEAT_TIMES = 1
     TIME_STEPS   = 18
     COND_SCALE   = 4.0

@@ -472,13 +472,11 @@ class MaskTransformer(nn.Module):
             # print(filtered_logits.shape)
             # temperature is annealed, gradually reducing temperature as well as randomness
             if gsample:  # use gumbel_softmax sampling
-                # print("1111")
                 pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)  # (b, seqlen)
+            elif temperature == 0:  # greedy decoding
+                pred_ids = filtered_logits.argmax(dim=-1)  # (b, seqlen)
             else:  # use multinomial sampling
-                # print("2222")
                 probs = F.softmax(filtered_logits / temperature, dim=-1)  # (b, seqlen, ntoken)
-                # print(temperature, starting_temperature, steps_until_x0, timesteps)
-                # print(probs / temperature)
                 pred_ids = Categorical(probs).sample()  # (b, seqlen)
 
             # print(pred_ids.max(), pred_ids.min())
@@ -592,13 +590,11 @@ class MaskTransformer(nn.Module):
             # print(filtered_logits.shape)
             # temperature is annealed, gradually reducing temperature as well as randomness
             if gsample:  # use gumbel_softmax sampling
-                # print("1111")
                 pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)  # (b, seqlen)
+            elif temperature == 0:  # greedy decoding
+                pred_ids = filtered_logits.argmax(dim=-1)  # (b, seqlen)
             else:  # use multinomial sampling
-                # print("2222")
                 probs = F.softmax(filtered_logits / temperature, dim=-1)  # (b, seqlen, ntoken)
-                # print(temperature, starting_temperature, steps_until_x0, timesteps)
-                # print(probs / temperature)
                 pred_ids = Categorical(probs).sample()  # (b, seqlen)
 
             # print(pred_ids.max(), pred_ids.min())
